@@ -116,7 +116,6 @@ fn main() {
     let total = total_stats.into_inner().unwrap();
     let files_count = total_files.into_inner().unwrap();
 
-    // Output
     if args.json {
         print_json(&stats_map, &total, files_count);
     } else {
