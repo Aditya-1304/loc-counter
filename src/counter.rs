@@ -21,17 +21,45 @@ impl LineStats {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum StringDelimiter {
+    Single,       // '
+    Double,       // "
+    TripleSingle, // '''
+    TripleDouble, // """
+    Backtick,     // ` (JS template literals)
+}
+
+/// Line classification result
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LineType {
+    Blank,
+    Comment,
+    Code,
+    Mixed,
+}
+
 pub fn count_lines(path: &Path, lang_config: Option<LanguageConfig>) -> Result<LineStats> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
     let mut stats = LineStats::default();
-    let mut in_block_comment = false;
 
-    let (line_comment, block_comment) = match lang_config {
-        Some(c) => (c.line_comment, c.block_comment),
-        None => (None, None),
-    };
+    let line_comment = lang_config.as_ref().and_then(|c| c.line_comment);
+    let block_comment = lang_config.as_ref().and_then(|c| c.block_comment);
+
+    let is_python = lang_config
+        .as_ref()
+        .map(|c| c.name == "Python")
+        .unwrap_or(false);
+
+    let is_text = lang_config
+        .as_ref()
+        .map(|c| c.name == "Plain Text" || c.name == "Markdown")
+        .unwrap_or(false);
+
+    let mut in_block_comment = false;
+    let mut in_string: Option<StringDelimiter> = None;
 
     for line in reader.lines() {
         let line = line?;
@@ -43,33 +71,243 @@ pub fn count_lines(path: &Path, lang_config: Option<LanguageConfig>) -> Result<L
             continue;
         }
 
-        // handle block comments
-        if let Some((start, end)) = block_comment {
-            if in_block_comment {
-                stats.comments += 1;
-                if trimmed.contains(end) {
+        if is_text {
+            stats.comments += 1;
+            continue;
+        }
+
+        if in_block_comment {
+            stats.comments += 1;
+            if let Some((_, end)) = block_comment {
+                // Check if block comment ends on this line
+                if let Some(pos) = trimmed.find(end) {
+                    // Check if there's code after the comment ends
+                    let after = &trimmed[pos + end.len()..].trim();
+                    if !after.is_empty() && !after.starts_with(line_comment.unwrap_or("")) {
+                        // There's code after the comment - count as mixed (code)
+                        stats.comments -= 1;
+                        stats.code += 1;
+                    }
                     in_block_comment = false;
                 }
-                continue;
             }
-
-            if trimmed.starts_with(start) {
-                stats.comments += 1;
-                if !trimmed.contains(end) || trimmed.ends_with(start) {
-                    in_block_comment = true;
-                }
-                continue;
-            }
+            continue;
         }
 
-        // handle line comments
-        if let Some(comment_prefix) = line_comment {
-            if trimmed.starts_with(comment_prefix) {
-                stats.comments += 1;
-                continue;
+        if let Some(delim) = in_string {
+            // For Python, triple-quoted strings are CODE (docstrings), not comments
+            stats.code += 1;
+
+            let end_delim = match delim {
+                StringDelimiter::TripleSingle => "'''",
+                StringDelimiter::TripleDouble => "\"\"\"",
+                StringDelimiter::Single => "'",
+                StringDelimiter::Double => "\"",
+                StringDelimiter::Backtick => "`",
+            };
+
+            if contains_unescaped(trimmed, end_delim) {
+                in_string = None;
             }
+            continue;
         }
-        stats.code += 1;
+
+        // Analyze the line character by character
+        let line_type = classify_line(
+            trimmed,
+            line_comment,
+            block_comment,
+            is_python,
+            &mut in_block_comment,
+            &mut in_string,
+        );
+
+        match line_type {
+            LineType::Blank => stats.blank += 1,
+            LineType::Comment => stats.comments += 1,
+            LineType::Code | LineType::Mixed => stats.code += 1,
+        }
     }
+
     Ok(stats)
+}
+
+/// Classify a line as blank, comment, code, or mixed
+fn classify_line(
+    line: &str,
+    line_comment: Option<&str>,
+    block_comment: Option<(&str, &str)>,
+    is_python: bool,
+    in_block_comment: &mut bool,
+    in_string: &mut Option<StringDelimiter>,
+) -> LineType {
+    let trimmed = line.trim();
+
+    if trimmed.is_empty() {
+        return LineType::Blank;
+    }
+
+    // For Python, ignore triple-quote "block comments" - they're strings
+    let effective_block_comment = if is_python { None } else { block_comment };
+
+    let mut has_code = false;
+    let mut has_comment = false;
+    let mut current_string: Option<StringDelimiter> = None;
+    let mut i = 0;
+
+    while i < trimmed.len() {
+        let remaining = &trimmed[i..];
+
+        // Check if we're entering/exiting a string
+        if current_string.is_none() {
+            // Check for triple-quoted strings first (Python)
+            if remaining.starts_with("\"\"\"") {
+                current_string = Some(StringDelimiter::TripleDouble);
+                has_code = true;
+                i += 3;
+                continue;
+            }
+            if remaining.starts_with("'''") {
+                current_string = Some(StringDelimiter::TripleSingle);
+                has_code = true;
+                i += 3;
+                continue;
+            }
+            // Check for regular strings
+            if remaining.starts_with('"') && !is_escaped(trimmed, i) {
+                current_string = Some(StringDelimiter::Double);
+                has_code = true;
+                i += 1;
+                continue;
+            }
+            if remaining.starts_with('\'') && !is_escaped(trimmed, i) {
+                // In some languages ' is used for chars, treat same as string
+                current_string = Some(StringDelimiter::Single);
+                has_code = true;
+                i += 1;
+                continue;
+            }
+            if remaining.starts_with('`') {
+                current_string = Some(StringDelimiter::Backtick);
+                has_code = true;
+                i += 1;
+                continue;
+            }
+
+            // Check for block comment start
+            if let Some((start, _)) = effective_block_comment {
+                if remaining.starts_with(start) {
+                    // Block comment starts here
+                    if has_code {
+                        // We already have code, so this is mixed
+                        has_comment = true;
+                    } else {
+                        has_comment = true;
+                    }
+
+                    // Check if block comment ends on same line
+                    if let Some((_, end)) = effective_block_comment {
+                        let after_start = &remaining[start.len()..];
+                        if let Some(end_pos) = after_start.find(end) {
+                            // Block comment ends on this line
+                            i += start.len() + end_pos + end.len();
+                            continue;
+                        } else {
+                            // Block comment continues to next line
+                            *in_block_comment = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Check for line comment
+            if let Some(comment_prefix) = line_comment {
+                if remaining.starts_with(comment_prefix) {
+                    has_comment = true;
+                    // Rest of line is comment
+                    break;
+                }
+            }
+
+            // Regular code character
+            if !remaining.starts_with(char::is_whitespace) {
+                has_code = true;
+            }
+            i += remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        } else {
+            // We're inside a string - everything is code
+            has_code = true;
+
+            let end_delim = match current_string.unwrap() {
+                StringDelimiter::TripleDouble => "\"\"\"",
+                StringDelimiter::TripleSingle => "'''",
+                StringDelimiter::Double => "\"",
+                StringDelimiter::Single => "'",
+                StringDelimiter::Backtick => "`",
+            };
+
+            if remaining.starts_with(end_delim) && !is_escaped(trimmed, i) {
+                current_string = None;
+                i += end_delim.len();
+            } else {
+                i += remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            }
+        }
+    }
+
+    // If we're still in a multi-line string at end of line
+    if current_string.is_some() {
+        *in_string = current_string;
+    }
+
+    // Determine line type
+    match (has_code, has_comment) {
+        (false, false) => LineType::Blank,
+        (false, true) => LineType::Comment,
+        (true, false) => LineType::Code,
+        (true, true) => LineType::Mixed, // Has both code and comment
+    }
+}
+
+/// Check if position i in string is escaped (preceded by odd number of backslashes)
+fn is_escaped(s: &str, pos: usize) -> bool {
+    if pos == 0 {
+        return false;
+    }
+
+    let bytes = s.as_bytes();
+    let mut backslash_count = 0;
+    let mut i = pos - 1;
+
+    loop {
+        if bytes.get(i) == Some(&b'\\') {
+            backslash_count += 1;
+            if i == 0 {
+                break;
+            }
+            i -= 1;
+        } else {
+            break;
+        }
+    }
+
+    backslash_count % 2 == 1
+}
+
+/// Check if string contains unescaped delimiter
+fn contains_unescaped(s: &str, delim: &str) -> bool {
+    let mut i = 0;
+    while i < s.len() {
+        if let Some(pos) = s[i..].find(delim) {
+            let actual_pos = i + pos;
+            if !is_escaped(s, actual_pos) {
+                return true;
+            }
+            i = actual_pos + 1;
+        } else {
+            break;
+        }
+    }
+    false
 }

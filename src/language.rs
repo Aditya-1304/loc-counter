@@ -20,7 +20,7 @@ pub fn get_language_configs() -> HashMap<&'static str, LanguageConfig> {
             name: "Python",
             extensions: &["py", "pyw"],
             line_comment: Some("#"),
-            block_comment: Some(("\"\"\"", "\"\"\"")),
+            block_comment: None,
         },
         LanguageConfig {
             name: "JavaScript",
@@ -98,6 +98,18 @@ pub fn get_language_configs() -> HashMap<&'static str, LanguageConfig> {
             name: "Markdown",
             extensions: &["md", "markdown"],
             line_comment: None,
+            block_comment: None,
+        },
+        LanguageConfig {
+            name: "Plain Text",
+            extensions: &["txt", "text"],
+            line_comment: None,
+            block_comment: None,
+        },
+        LanguageConfig {
+            name: "Makefile",
+            extensions: &["mk", "makefile"],
+            line_comment: Some("#"),
             block_comment: None,
         },
     ];
