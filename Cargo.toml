@@ -1,9 +1,9 @@
 [package]
 name = "loc_counter"
 version = "0.1.0"
-edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
-description = "A fast and feature-rich lines of code counter"
+edition = "2024"
+authors = ["Aditya Mandal <mandaladitya1614@gmail.com>"]
+description = "A fast lines of code counter"
 license = "MIT"
 repository = "https://github.com/Aditya-1304/loc-counter"
 homepage = "https://github.com/Aditya-1304/loc-counter"
@@ -11,8 +11,9 @@ readme = "README.md"
 keywords = ["cli", "loc", "lines-of-code", "code-counter", "productivity"]
 categories = ["command-line-utilities", "development-tools"]
 # This tells cargo which binary to build
+
 [[bin]]
-name = "loc"  # This is what users will type to run your tool
+name = "loc"
 path = "src/main.rs"
 
 [dependencies]
