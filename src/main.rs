@@ -16,11 +16,11 @@ use walker::FileWalker;
 
 #[derive(Parser, Debug)]
 struct Args {
-    /// Path to the directory to analyze
+    /// Path to the directory
     #[arg(default_value = ".")]
     path: PathBuf,
 
-    /// Include hidden files and directories
+    /// hidden files and directories
     #[arg(short = 'H', long)]
     hidden: bool,
 
@@ -44,7 +44,6 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    // Validate path
     if !args.path.exists() {
         eprintln!("Error: Path '{}' does not exist", args.path.display());
         std::process::exit(1);
@@ -53,13 +52,11 @@ fn main() {
     let lang_configs = get_language_configs();
     let walker = FileWalker::new(!args.no_ignore, args.hidden);
 
-    // Collect all files first
     let files: Vec<_> = walker
         .walk(&args.path)
         .filter(|entry| {
             let path = entry.path();
 
-            // Check extension filter
             if let Some(ref exts) = args.extensions {
                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                     if !exts.iter().any(|e| e.eq_ignore_ascii_case(ext)) {
@@ -70,7 +67,6 @@ fn main() {
                 }
             }
 
-            // Check exclude filter
             if let Some(ref excludes) = args.exclude {
                 let path_str = path.to_string_lossy();
                 if excludes.iter().any(|ex| path_str.contains(ex)) {
@@ -82,7 +78,6 @@ fn main() {
         })
         .collect();
 
-    // Process files in parallel
     let stats_by_language: Mutex<HashMap<String, LanguageStats>> = Mutex::new(HashMap::new());
     let total_stats: Mutex<LineStats> = Mutex::new(LineStats::default());
     let total_files: Mutex<usize> = Mutex::new(0);
