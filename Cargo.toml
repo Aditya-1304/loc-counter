@@ -1,6 +1,6 @@
 [package]
 name = "loc_counter"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 authors = ["Aditya Mandal <mandaladitya1614@gmail.com>"]
 description = "A fast lines of code counter"
@@ -10,7 +10,6 @@ homepage = "https://github.com/Aditya-1304/loc-counter"
 readme = "README.md"
 keywords = ["cli", "loc", "lines-of-code", "code-counter", "productivity"]
 categories = ["command-line-utilities", "development-tools"]
-# This tells cargo which binary to build
 
 [[bin]]
 name = "loc"
@@ -29,3 +28,10 @@ serde_json = "1.0.149"
 tar = "0.4.44"
 tempfile = "3.25.0"
 url = "2.5.8"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"

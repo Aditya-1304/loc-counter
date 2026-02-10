@@ -2,7 +2,7 @@ use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use std::error::Error;
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use tar::Archive;
 use url::Url;
@@ -49,7 +49,8 @@ where
         }
     }
 
-    let decoder = GzDecoder::new(resp);
+    let buffered = BufReader::with_capacity(128 * 1024, resp);
+    let decoder = GzDecoder::new(buffered);
     let mut archive = Archive::new(decoder);
 
     for entry_result in archive.entries()? {
