@@ -2,6 +2,7 @@ mod counter;
 mod language;
 mod output;
 mod walker;
+mod remote;
 
 use clap::Parser;
 use rayon::prelude::*;
@@ -16,27 +17,30 @@ use walker::FileWalker;
 
 #[derive(Parser, Debug)]
 struct Args {
-    /// Path to the directory
     #[arg(default_value = ".")]
     path: PathBuf,
 
-    /// hidden files and directories
+    #[arg(long)]
+    link: Option<String>,
+
+    #[arg(long)]
+    git_ref: Option<String>,
+
+    #[arg(long)]
+    github_token: Option<String>,
+
     #[arg(short = 'H', long)]
     hidden: bool,
 
-    /// Don't respect .gitignore files
     #[arg(long)]
     no_ignore: bool,
 
-    /// Output as JSON
     #[arg(short, long)]
     json: bool,
 
-    /// Only count specific file extensions (comma-separated)
     #[arg(short, long, value_delimiter = ',')]
     extensions: Option<Vec<String>>,
 
-    /// Exclude specific directories (comma-separated)
     #[arg(short = 'x', long, value_delimiter = ',')]
     exclude: Option<Vec<String>>,
 }
@@ -44,16 +48,32 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    if !args.path.exists() {
-        eprintln!("Error: Path '{}' does not exist", args.path.display());
-        std::process::exit(1);
-    }
+    let (scan_root, _repo_guard): (PathBuf, Option<remote::RepoSource>) = 
+        if let Some(link) = args.link.as_deref() {
+            let repo = remote::fetch_github_repo(
+                link,
+                args.git_ref.as_deref(), 
+                args.github_token.as_deref(),
+            )
+            .unwrap_or_else(|e| {
+                eprintln!("Error fetching repository: {e}");
+                std::process::exit(1);
+            });
+
+            (repo.root.clone(), Some(repo))
+        } else {
+            if !args.path.exists() {
+                eprintln!("Error: Path '{}' does not exist", args.path.display());
+                std::process::exit(1);
+            }
+            (args.path.clone(), None)
+        };
 
     let lang_configs = get_language_configs();
     let walker = FileWalker::new(!args.no_ignore, args.hidden);
 
     let files: Vec<_> = walker
-        .walk(&args.path)
+        .walk(&scan_root)
         .filter(|entry| {
             let path = entry.path();
 
