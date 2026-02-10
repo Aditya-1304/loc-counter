@@ -41,9 +41,15 @@ enum LineType {
 
 pub fn count_lines(path: &Path, lang_config: Option<&LanguageConfig>) -> Result<LineStats> {
     let file = File::open(path)?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
+
+    if is_probably_binary_prefix(reader.fill_buf()?) {
+        return Ok(LineStats::default());
+    }
+
     count_lines_reader(reader, lang_config)
 }
+
 
 pub fn count_lines_reader<R: BufRead>(
     mut reader: R, 
@@ -177,7 +183,7 @@ fn classify_line(
                 i += 3;
                 continue;
             }
-            // Check for regular strings
+
             if remaining.starts_with('"') && !is_escaped(trimmed, i) {
                 current_string = Some(StringDelimiter::Double);
                 has_code = true;
@@ -185,7 +191,6 @@ fn classify_line(
                 continue;
             }
             if remaining.starts_with('\'') && !is_escaped(trimmed, i) {
-                // In some languages ' is used for chars, treat same as string
                 current_string = Some(StringDelimiter::Single);
                 has_code = true;
                 i += 1;
@@ -198,12 +203,9 @@ fn classify_line(
                 continue;
             }
 
-            // Check for block comment start
             if let Some((start, _)) = effective_block_comment {
                 if remaining.starts_with(start) {
-                    // Block comment starts here
                     if has_code {
-                        // We already have code, so this is mixed
                         has_comment = true;
                     } else {
                         has_comment = true;
@@ -229,7 +231,6 @@ fn classify_line(
             if let Some(comment_prefix) = line_comment {
                 if remaining.starts_with(comment_prefix) {
                     has_comment = true;
-                    // Rest of line is comment
                     break;
                 }
             }
@@ -240,15 +241,18 @@ fn classify_line(
             }
             i += remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
         } else {
-            // We're inside a string - everything is code
             has_code = true;
 
-            let end_delim = match current_string.unwrap() {
-                StringDelimiter::TripleDouble => "\"\"\"",
-                StringDelimiter::TripleSingle => "'''",
-                StringDelimiter::Double => "\"",
-                StringDelimiter::Single => "'",
-                StringDelimiter::Backtick => "`",
+            let end_delim = match current_string {
+                Some(StringDelimiter::TripleDouble) => "\"\"\"",
+                Some(StringDelimiter::TripleSingle) => "'''",
+                Some(StringDelimiter::Double) => "\"",
+                Some(StringDelimiter::Single) => "'",
+                Some(StringDelimiter::Backtick) => "`",
+                None => {
+                    i += remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                    continue;
+                }
             };
 
             if remaining.starts_with(end_delim) && !is_escaped(trimmed, i) {
@@ -270,7 +274,7 @@ fn classify_line(
         (false, false) => LineType::Blank,
         (false, true) => LineType::Comment,
         (true, false) => LineType::Code,
-        (true, true) => LineType::Mixed, // Has both code and comment
+        (true, true) => LineType::Mixed, 
     }
 }
 
@@ -314,4 +318,9 @@ fn contains_unescaped(s: &str, delim: &str) -> bool {
         }
     }
     false
+}
+
+fn is_probably_binary_prefix(bytes: &[u8]) -> bool {
+    const PROBE_BYTES: usize = 8192;
+    bytes.iter().take(PROBE_BYTES).any(|&b| b == 0)
 }

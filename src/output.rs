@@ -9,7 +9,7 @@ pub struct LanguageStats {
 }
 
 pub fn print_table(
-    stats: &HashMap<String, LanguageStats>,
+    stats: &HashMap<&'static str, LanguageStats>,
     total_stats: &LineStats,
     total_files: usize,
 ) {
@@ -26,14 +26,13 @@ pub fn print_table(
     );
     println!("{:─<80}", "".bright_blue());
 
-    // Sort by code lines (descending)
     let mut sorted: Vec<_> = stats.iter().collect();
     sorted.sort_by(|a, b| b.1.stats.code.cmp(&a.1.stats.code));
 
     for (lang, lang_stats) in sorted {
         println!(
             "{:<15} {:>10} {:>12} {:>12} {:>12} {:>12}",
-            lang.green(),
+            (*lang).green(),
             lang_stats.files.to_string().yellow(),
             lang_stats.stats.total.to_string().white(),
             lang_stats.stats.code.to_string().bright_green(),
@@ -57,7 +56,7 @@ pub fn print_table(
 }
 
 pub fn print_json(
-    stats: &HashMap<String, LanguageStats>,
+    stats: &HashMap<&'static str, LanguageStats>,
     total_stats: &LineStats,
     total_files: usize,
 ) {
@@ -91,7 +90,7 @@ pub fn print_json(
         .iter()
         .map(|(lang, ls)| {
             (
-                lang.clone(),
+                (*lang).to_string(),
                 JsonLanguageStats {
                     files: ls.files,
                     total: ls.stats.total,
@@ -114,5 +113,8 @@ pub fn print_json(
         },
     };
 
-    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    match serde_json::to_string_pretty(&output) {
+        Ok(json) => println!("{json}"),
+        Err(err) => eprintln!("Failed to serialize JSON output: {err}"),
+    }
 }
