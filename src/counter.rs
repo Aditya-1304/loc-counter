@@ -39,27 +39,31 @@ enum LineType {
     Mixed,
 }
 
-pub fn count_lines(path: &Path, lang_config: Option<LanguageConfig>) -> Result<LineStats> {
+pub fn count_lines(path: &Path, lang_config: Option<&LanguageConfig>) -> Result<LineStats> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
+    count_lines_reader(reader, lang_config)
+}
 
+pub fn count_lines_reader<R: BufRead>(
+    mut reader: R, 
+    lang_config: Option<&LanguageConfig>
+) -> Result<LineStats> {
     let mut stats = LineStats::default();
 
-    let line_comment = lang_config.as_ref().and_then(|c| c.line_comment);
-    let block_comment = lang_config.as_ref().and_then(|c| c.block_comment);
+    let line_comment = lang_config.and_then(|c| c.line_comment);
+    let block_comment = lang_config.and_then(|c| c.block_comment);
 
     let is_python = lang_config
-        .as_ref()
-        .map(|c| c.name == "Python")
-        .unwrap_or(false);
+        .map_or(false, |c| c.name == "Python");
 
     let is_text = lang_config
-        .as_ref()
-        .map(|c| c.name == "Plain Text" || c.name == "Markdown")
-        .unwrap_or(false);
+        .map_or(false,|c| c.name == "Plain Text" || c.name == "Markdown");
 
     let mut in_block_comment = false;
     let mut in_string: Option<StringDelimiter> = None;
+
+    let mut line_buf = String::with_capacity(256);
 
     for line in reader.lines() {
         let line = line?;

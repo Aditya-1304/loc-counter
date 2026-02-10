@@ -8,7 +8,6 @@ use clap::Parser;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use counter::{LineStats, count_lines};
 use language::{detect_language, get_language_configs};
@@ -98,43 +97,55 @@ fn main() {
         })
         .collect();
 
-    let stats_by_language: Mutex<HashMap<String, LanguageStats>> = Mutex::new(HashMap::new());
-    let total_stats: Mutex<LineStats> = Mutex::new(LineStats::default());
-    let total_files: Mutex<usize> = Mutex::new(0);
+    let (stats_map, total, files_count) = files
+        .par_iter()
+        .fold(
+            || (HashMap::<String, LanguageStats>::new(), LineStats::default(), 0usize),
+            |(mut local_map, mut local_total, mut local_files), entry| {
+                let path = entry.path();
+                let extension = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_ascii_lowercase());
 
-    files.par_iter().for_each(|entry| {
-        let path = entry.path();
-        let extension = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase());
+                let lang_config = extension
+                    .as_deref()
+                    .and_then(|ext| detect_language(ext, &lang_configs));
 
-        let lang_config = extension
-            .as_deref()
-            .and_then(|ext| detect_language(ext, &lang_configs));
+                let lang_name = lang_config.map(|c| c.name).unwrap_or("Other");
 
-        let lang_name = lang_config
-            .as_ref()
-            .map(|c| c.name.to_string())
-            .unwrap_or_else(|| "Other".to_string());
+                if let Ok(file_stats) = count_lines(path, lang_config) {
+                    let slot = local_map.entry(lang_name.to_string()).or_insert(LanguageStats {
+                        files: 0,
+                        stats: LineStats::default(),
+                    });
+                    slot.files += 1;
+                    slot.stats.add(&file_stats);
 
-        if let Ok(file_stats) = count_lines(path, lang_config.clone()) {
-            let mut stats_map = stats_by_language.lock().unwrap();
-            let entry = stats_map.entry(lang_name).or_insert(LanguageStats {
-                files: 0,
-                stats: LineStats::default(),
-            });
-            entry.files += 1;
-            entry.stats.add(&file_stats);
+                    local_total.add(&file_stats);
+                    local_files += 1;
+                }
 
-            total_stats.lock().unwrap().add(&file_stats);
-            *total_files.lock().unwrap() += 1;
-        }
-    });
+                (local_map, local_total, local_files)
+            },
+        )
+        .reduce(
+            || (HashMap::<String, LanguageStats>::new(), LineStats::default(), 0usize),
+            |(mut map_a, mut total_a, mut files_a), (map_b, total_b, files_b)| {
+                for (lang, stats_b) in map_b {
+                    let slot = map_a.entry(lang).or_insert(LanguageStats {
+                        files: 0,
+                        stats: LineStats::default(),
+                    });
+                    slot.files += stats_b.files;
+                    slot.stats.add(&stats_b.stats);
+                }
 
-    let stats_map = stats_by_language.into_inner().unwrap();
-    let total = total_stats.into_inner().unwrap();
-    let files_count = total_files.into_inner().unwrap();
+                total_a.add(&total_b);
+                files_a += files_b;
+                (map_a, total_a, files_a)
+            }
+        );
 
     if args.json {
         print_json(&stats_map, &total, files_count);
