@@ -2,25 +2,25 @@ use flate2::read::GzDecoder;
 use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use std::error::Error;
-use std::fs;
-use std::io::Cursor;
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path,PathBuf};
 use tar::Archive;
-use tempfile::TempDir;
 use url::Url;
 
 type AnyError = Box<dyn Error + Send + Sync>;
 
 pub struct RepoSource {
-  pub root: PathBuf,
-  _tmp: TempDir,
+  pub rel_path: PathBuf,
+  pub bytes: Vec<u8>,
 }
 
-pub fn fetch_github_repo(
+pub fn stream_github_repo_in_memory<F>(
   repo_url: &str,
   git_ref: Option<&str>,
   token: Option<&str>,
-) -> Result<RepoSource, AnyError> {
+  max_batch_bytes: usize,
+  mut on_batch: F,
+) -> Result<(), AnyError> where F: FnMut(Vec<RepoSource>) {
   let (owner, repo) = parse_github_url(repo_url)?;
 
   let endpoint = match git_ref {
@@ -46,20 +46,55 @@ pub fn fetch_github_repo(
     }
   }
 
-  let tmp = TempDir::new()?;
-
   let decoder = GzDecoder::new(resp);
   let mut archive = Archive::new(decoder);
-  archive.unpack(tmp.path())?;
 
-  let root = fs::read_dir(tmp.path())?
-    .filter_map(Result::ok)
-    .map(|e| e.path())
-    .find(|p| p.is_dir())
-    .ok_or("Could not find extracted repo root directory")?;
+  let batch_limit = max_batch_bytes.max(1);
 
-  Ok(RepoSource { root, _tmp: tmp })
+  let mut batch = Vec::new();
+  let mut batch_bytes = 0usize;
 
+  for entry_result in archive.entries()? {
+    let mut entry = entry_result?;
+
+    if !entry.header().entry_type().is_file() {
+      continue;
+    }
+    let full_path = entry.path()?.into_owned();
+    let rel_path = strip_repo_root(&full_path);
+    if rel_path.as_os_str().is_empty() {
+      continue;
+    }
+
+    let mut bytes = Vec::with_capacity(entry.size().min(8 * 1024* 1024) as usize);
+    entry.read_to_end(&mut bytes)?;
+
+    if !batch.is_empty() && batch_bytes + bytes.len() > batch_limit {
+      on_batch(std::mem::take(&mut batch));
+      batch_bytes = 0;
+    }
+
+    batch_bytes += bytes.len();
+    batch.push(RepoSource { rel_path, bytes });
+
+    if batch_bytes >= batch_limit {
+      on_batch(std::mem::take(&mut batch));
+      batch_bytes = 0;
+    }
+  }
+
+  if !batch.is_empty() {
+    on_batch(batch);
+  }
+
+  Ok(())
+
+}
+
+fn strip_repo_root(path: &Path) -> PathBuf {
+    let mut components = path.components();
+    let _ = components.next();
+    components.as_path().to_path_buf()
 }
 
 fn parse_github_url(input: &str) -> Result<(String, String), AnyError> {
