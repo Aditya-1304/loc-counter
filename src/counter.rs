@@ -65,9 +65,14 @@ pub fn count_lines_reader<R: BufRead>(
 
     let mut line_buf = String::with_capacity(256);
 
-    for line in reader.lines() {
-        let line = line?;
-        let trimmed = line.trim();
+    loop {
+        line_buf.clear();
+        let n = reader.read_line(&mut line_buf)?;
+        if n == 0 {
+            break;
+        }
+
+        let trimmed = line_buf.trim();
         stats.total += 1;
 
         if trimmed.is_empty() {
@@ -83,12 +88,9 @@ pub fn count_lines_reader<R: BufRead>(
         if in_block_comment {
             stats.comments += 1;
             if let Some((_, end)) = block_comment {
-                // Check if block comment ends on this line
                 if let Some(pos) = trimmed.find(end) {
-                    // Check if there's code after the comment ends
                     let after = &trimmed[pos + end.len()..].trim();
                     if !after.is_empty() && !after.starts_with(line_comment.unwrap_or("")) {
-                        // There's code after the comment - count as mixed (code)
                         stats.comments -= 1;
                         stats.code += 1;
                     }
@@ -99,7 +101,6 @@ pub fn count_lines_reader<R: BufRead>(
         }
 
         if let Some(delim) = in_string {
-            // For Python, triple-quoted strings are CODE (docstrings), not comments
             stats.code += 1;
 
             let end_delim = match delim {
@@ -116,7 +117,6 @@ pub fn count_lines_reader<R: BufRead>(
             continue;
         }
 
-        // Analyze the line character by character
         let line_type = classify_line(
             trimmed,
             line_comment,

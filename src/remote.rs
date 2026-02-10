@@ -46,10 +46,9 @@ pub fn fetch_github_repo(
     }
   }
 
-  let bytes = resp.bytes()?;
   let tmp = TempDir::new()?;
 
-  let decoder = GzDecoder::new(Cursor::new(bytes));
+  let decoder = GzDecoder::new(resp);
   let mut archive = Archive::new(decoder);
   archive.unpack(tmp.path())?;
 
